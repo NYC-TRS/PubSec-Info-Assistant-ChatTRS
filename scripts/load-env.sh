@@ -86,7 +86,7 @@ elif [[ "${WORKSPACE}" =~ [[:upper:]] ]]; then
 fi
 
 # Set the name of the resource group
-export TF_VAR_resource_group_name="infoasst-$WORKSPACE"
+export TF_VAR_resource_group_name="msazai$WORKSPACE"
 
 # The default key that is used in the remote state
 export TF_BACKEND_STATE_KEY="shared.infoasst.tfstate"

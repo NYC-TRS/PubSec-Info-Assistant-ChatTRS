@@ -7,6 +7,7 @@ import logging
 import urllib.parse
 from datetime import datetime, timedelta
 from typing import Any, AsyncGenerator, Coroutine, Sequence
+
 import openai
 from openai import AzureOpenAI
 from openai import  AsyncAzureOpenAI
