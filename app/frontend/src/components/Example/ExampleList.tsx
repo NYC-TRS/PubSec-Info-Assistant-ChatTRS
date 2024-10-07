@@ -11,8 +11,8 @@ export type ExampleModel = {
 };
 
 const EXAMPLES: ExampleModel[] = [
-    { text: "What are the different Tiers for retirement?", value: "What are the different Tiers for retirment?" },
-    { text: "How many vacation days do i earn?", value: "How many vacation days do i earn?" },
+    { text: "What are the different Tiers for retirement?", value: "What are the different Tiers for retirement?" },
+    { text: "How many vacation days do i earn?", value: "How many vacation days do employees earn?" },
     { text: "How do you take out a QPP loan?", value: "How do you take out a QPP loan?" }
 ];
 
