@@ -11,7 +11,7 @@ resource "azurerm_service_plan" "appServicePlan" {
   tags                          = var.tags
   per_site_scaling_enabled      = false
   zone_balancing_enabled        = false
-}
+  }
 
 resource "azurerm_monitor_autoscale_setting" "scaleout" {
   name                = azurerm_service_plan.appServicePlan.name

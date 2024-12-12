@@ -11,9 +11,9 @@ export type ExampleModel = {
 };
 
 const EXAMPLES: ExampleModel[] = [
-    { text: "What are the different Tiers for retirement?", value: "What are the different Tiers for retirement?" },
-    { text: "How many vacation days do i earn?", value: "How many vacation days do employees earn?" },
-    { text: "How do you take out a QPP loan?", value: "How do you take out a QPP loan?" }
+    { text: "What is the employee dress code?", value: "What is the employee dress code?" },
+    { text: "What are the different rules associated with Tier IV Chapter 504?", value: "What are the different rules associated with Tier IV Chapter 504?" },
+    { text: "List and explain some recent board resolutions and there impact on TRS.", value: "List and explain some recent board resolutions and there impact on TRS." }
 ];
 
 interface Props {

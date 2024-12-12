@@ -75,7 +75,7 @@ module "enrichmentApp" {
   sku = {
     size                                    = var.enrichmentAppServiceSkuSize
     tier                                    = var.enrichmentAppServiceSkuTier
-    capacity                                = 3
+    capacity                                = 2
   }
   kind                                      = "linux"
   reserved                                  = true
