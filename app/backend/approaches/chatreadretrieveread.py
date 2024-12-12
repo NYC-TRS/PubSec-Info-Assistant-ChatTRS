@@ -6,12 +6,13 @@ import re
 import logging
 import urllib.parse
 from datetime import datetime, timedelta
-from typing import Any, AsyncGenerator, Coroutine, Sequence
+from typing import Any, Sequence
+
 import openai
-from openai import AzureOpenAI
 from openai import AsyncAzureOpenAI
+from openai import BadRequestError
 from approaches.approach import Approach
-from azure.search.documents import SearchClient  
+from azure.search.documents import SearchClient
 from azure.search.documents.models import RawVectorQuery
 from azure.search.documents.models import QueryType
 from azure.storage.blob import (
@@ -54,8 +55,9 @@ class ChatReadRetrieveReadApproach(Approach):
     {injected_prompt}
     """
 
+
 FOLLOW_UP_QUESTIONS_PROMPT_CONTENT = """Based on the user’s current inquiry and conversation, generate three brief, relevant follow-up questions about their agency's data. 
-Each question must be enclosed in triple chevrons (<<<How is sensitive data protected?>>>), focus on key topics, and not repeat any questions already asked. 
+Each question must be enclosed in triple chevrons (<<<How is sensitive data protected?>>>), focus on key topics, and do not repeat any questions already asked. 
 Do not add any additional text beyond the questions."""
 
 QUERY_PROMPT_TEMPLATE = """Using the conversation history and the new question, generate a search query focusing on the most relevant keywords. Prioritize actionable terms from the 
@@ -63,49 +65,39 @@ latest part of the conversation, avoiding common words (e.g., 'the', 'and'). Do 
 brackets, or special characters like '+'. If you cannot generate a valid search query, return '0'.
 """
 QUERY_PROMPT_FEW_SHOTS = [
-    {'role': Approach.USER,
-        'content': 'What are the plans for improving operational efficiency at TRS?'},
-    {'role': Approach.ASSISTANT,
-        'content': 'TRS plans to enhance efficiency with AI automation, better digital platforms, and workflow optimization.'},
-    {'role': Approach.USER,
-        'content': 'What progress has been made with AI at TRS this year?'},
-    {'role': Approach.ASSISTANT, 'content': 'TRS has introduced AI tools like the KnowledgeBot and predictive intelligence to improve service and decision-making.'}
+        {'role': Approach.USER, 'content': 'What are the future plans for public transportation development?'},
+        {'role': Approach.ASSISTANT, 'content': 'Future plans for public transportation'},
+        {'role': Approach.USER, 'content': 'how much renewable energy was generated last year?'},
+        {'role': Approach.ASSISTANT, 'content': 'Renewable energy generation last year'}
 ]
 RESPONSE_PROMPT_FEW_SHOTS = [
-    {"role": Approach.USER,
-        'content': 'I need data directly from TRS’s reports on tech adoption.'},
-    {'role': Approach.ASSISTANT,
-        'content': 'User needs data directly from TRS reports. Responses should reference only what’s in the documents.'},
-    {'role': Approach.USER,
-        'content': 'What has TRS done to improve cybersecurity this year?'},
-    {'role': Approach.ASSISTANT,
-        'content': 'TRS has implemented multi-factor authentication, stronger encryption, and security training. [File0]'}
+    {"role": Approach.USER,  'content': 'I am looking for information in source documents'},
+        {'role': Approach.ASSISTANT, 'content': 'user is looking for information in source documents. Do not provide answers that are not in the source documents'},
+        {'role': Approach.USER, 'content': 'What steps are being taken to promote energy conservation?'},
+        {'role': Approach.ASSISTANT, 'content': 'Several steps are being taken to promote energy conservation including reducing energy consumption, increasing energy efficiency, and increasing the use of renewable energy sources.Citations[File0]'}
 ]
-
-
 def __init__(
-        self,
-        search_client: SearchClient,
-        oai_endpoint: str,
-        oai_service_key: str,
-        chatgpt_deployment: str,
-        source_file_field: str,
-        content_field: str,
-        page_number_field: str,
-        chunk_file_field: str,
-        content_storage_container: str,
-        blob_client: BlobServiceClient,
-        query_term_language: str,
-        model_name: str,
-        model_version: str,
-        target_embedding_model: str,
-        enrichment_appservice_uri: str,
-        target_translation_language: str,
-        enrichment_endpoint: str,
-        enrichment_key: str,
-        azure_ai_translation_domain: str,
-        use_semantic_reranker: bool
-
+    self,
+    search_client: SearchClient,
+    oai_endpoint: str,
+    oai_service_key: str,
+    chatgpt_deployment: str,
+    source_file_field: str,
+    content_field: str,
+    page_number_field: str,
+    chunk_file_field: str,
+    content_storage_container: str,
+    blob_client: BlobServiceClient,
+    query_term_language: str,
+    model_name: str,
+    model_version: str,
+    target_embedding_model: str,
+    enrichment_appservice_uri: str,
+    target_translation_language: str,
+    enrichment_endpoint: str,
+    enrichment_key: str,
+    azure_ai_translation_domain: str,
+    use_semantic_reranker: bool
 ):
     self.search_client = search_client
     self.chatgpt_deployment = chatgpt_deployment
@@ -117,9 +109,7 @@ def __init__(
     self.blob_client = blob_client
     self.query_term_language = query_term_language
     self.chatgpt_token_limit = get_token_limit(model_name)
-    # escape target embeddiong model name
-    self.escaped_target_model = re.sub(
-        r'[^a-zA-Z0-9_\-.]', '_', target_embedding_model)
+    self.escaped_target_model = re.sub(r'[^a-zA-Z0-9_\-.]', '_', target_embedding_model)
     self.target_translation_language = target_translation_language
     self.enrichment_endpoint = enrichment_endpoint
     self.enrichment_key = enrichment_key
@@ -136,10 +126,12 @@ def __init__(
     self.client = AsyncAzureOpenAI(
         azure_endpoint=openai.api_base,
         api_key=openai.api_key,
-        api_version=openai.api_version)
+        api_version=openai.api_version
+    )
 
     self.model_name = model_name
     self.model_version = model_version
+
 
     # def run(self, history: list[dict], overrides: dict) -> any:
 
