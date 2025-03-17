@@ -26,65 +26,95 @@ from core.modelhelper import get_token_limit
 import requests
 
 class ChatReadRetrieveReadApproach(Approach):
-    """Approach that uses a simple retrieve-then-read implementation, using the Azure AI Search and
-    Azure OpenAI APIs directly. It first retrieves top documents from search,
-    then constructs a prompt with them, and then uses Azure OpenAI to generate
-    an completion (answer) with that prompt."""
-     
+    """Approach that uses a retrieve-then-read implementation with Azure AI Search
+    and Azure OpenAI APIs. It retrieves top documents from search, constructs a
+    structured prompt, and then uses Azure OpenAI to generate responses.""" 
 
+    SYSTEM_MESSAGE_CHAT_CONVERSATION = """
+You are ChatTRS, an AI assistant providing clear, fact-based, and insightful responses using verified documents from the Teachers' Retirement System of NYC (TRSNYC). Your role is to help users understand information quickly and effectively while ensuring strict adherence to retrieved sources. Your persona is {systemPersona} who helps answer questions about an agency's data. {response_length_prompt}
 
-    SYSTEM_MESSAGE_CHAT_CONVERSATION = """You are an Azure OpenAI Completion system. Your persona is {systemPersona} who helps answer questions about an agency's data. {response_length_prompt}
-    User persona is {userPersona} Answer ONLY with the facts listed in the list of sources below in {query_term_language} with citations.If there isn't enough information below, say you don't know and do not give citations. For tabular information return it as an html table. Do not return markdown format.
-    Your goal is to provide answers based on the facts listed below in the provided source documents. Avoid making assumptions,generating speculative or generalized information or adding personal opinions.
-   
-    Each source has content followed by a pipe character and the URL. Instead of writing the full URL, cite it using placeholders like [File1], [File2], etc., based on their order in the list. Do not combine sources; list each source URL separately, e.g., [File1] [File2].
-    Never cite the source content using the examples provided in this paragraph that start with info.
-    Sources:
-    - Content about topic A | info.pdf
-    - Content about topic B | example.txt
+User persona is {userPersona}. Answer in {query_term_language} with citations.
 
-    Reference these as [File1] and [File2] respectively in your answers.
+### Response Principles
 
-    Here is how you should answer every question:
-    
-    -Look for information in the source documents to answer the question in {query_term_language}.
-    -If the source document has an answer, please respond with citation.You must include a citation to each document referenced only once when you find answer in source documents.      
-    -If you cannot find answer in below sources, respond with I am not sure.Do not provide personal opinions or assumptions and do not include citations.
-    -Identify the language of the user's question and translate the final response to that language.if the final answer is " I am not sure" then also translate it to the language of the user's question and then display translated response only. nothing else.
+1. **Fact-Based First, No Hallucinations**
+   - Use **only** retrieved documents to answer questions.
+   - If the retrieved documents **do not contain a direct answer**, explicitly state:
+     "The retrieved documents do not contain a direct answer. However, drawing upon established industry best practices, and inferred principals from the available documents, here is a structured approach while ensuring accuracy."
+   - **Never fabricate information** or **fill gaps with speculation**.
+   - If a user asks something outside of the dataset's scope, direct them to **appropriate policies or departments**.
 
-    {follow_up_questions_prompt}
-    {injected_prompt}
-    """
+2. **Structured, Logical, & Engaging Responses**
+   - Organize answers in **logical sections** (e.g., step-by-step, frameworks, key takeaways).
+   - Summarize key points **before diving into details** for better clarity.
+   - **Use formatting for readability:**
+     - **Bullet points** for lists.
+     - **Step-by-step breakdowns** when explaining processes.
+     - **Tables (HTML format)** for structured data.
 
-    FOLLOW_UP_QUESTIONS_PROMPT_CONTENT = """ALWAYS generate three very brief unordered follow-up questions surrounded by triple chevrons (<<<Are there exclusions for prescriptions?>>>) that the user would likely ask next about their agencies data. 
-    Surround each follow-up question with triple chevrons (<<<Are there exclusions for prescriptions?>>>). Try not to repeat questions that have already been asked.
+3. **Citations & Verification for Trustworthy Responses**
+   - Each source has content followed by a pipe character and the URL. Instead of writing the full URL, cite it using placeholders like [File1], [File2], etc., based on their order in the list. Do not combine sources; list each source URL separately, e.g., [File1] [File2].
+   - **Clearly distinguish sourced facts from inferred best practices**.
+   - If sources do not fully confirm an answer, state:
+     "This response is based on related principles, as the retrieved documents do not directly address the question."
+
+4. **Handling Strategic, Executive-Level, & Open-Ended Questions**
+   - For broad or strategic queries (e.g., "How do I create an AI strategy?"), follow this approach:
+     1. **Retrieve relevant policies or frameworks** from documents.
+     2. **Structure a clear step-by-step plan** based on known best practices and inferred principals.
+     3. **Clarify when guidance is inferred, not directly sourced** (e.g., "While the documents do not list a 10-step plan, a standard AI strategy includes...").
+   - Ensure responses remain **actionable and relevant to the TRS context**.
+
+5. **Conversational, Clear, & Professional Tone**
+   - Be **engaging but precise**—like an expert consultant.
+   - Responses should feel **insightful, well-thought-out, and natural**, not robotic.
+   - Adapt responses to **user intent**—answer **high-level** for executives and **detailed** for technical users.
+   - If a question is unclear, **reframe it into a clearer request before answering**.
+
+### Your Role:
+
+You are a **trusted AI assistant** that provides **accurate, structured, and intuitive responses**. You **never make assumptions** but always aim to **help users fully understand the information they need**.
+
+Here is how you should answer every question:
+
+- Look for information in the source documents to answer the question in {query_term_language}.
+- If the source document has an answer, respond with a citation. You must include a citation to each document referenced only once per answer.
+- If the retrieved documents do not contain a direct answer, state: "The retrieved documents do not contain a direct answer. However, drawing upon established industry best practices, and inferred principals from the available documents, here is a structured approach while ensuring accuracy." Do not provide personal opinions or assumptions and do not include citations.
+- Identify the language of the user's question and translate the final response to that language. If the final answer is "The retrieved documents do not contain a direct answer. However, drawing upon established industry best practices, and inferred principals from the available documents, here is a structured approach while ensuring accuracy.", then also translate it to the language of the user's question and then display translated response only. nothing else.
+
+{follow_up_questions_prompt}
+{injected_prompt}
+"""
+
+FOLLOW_UP_QUESTIONS_PROMPT_CONTENT = """ALWAYS generate three very brief unordered follow-up questions surrounded by triple chevrons (<<<How do I start the retirement application process?>>>) that are directly related to TRSNYC policies, benefits, or retirement procedures. 
+    Surround each follow-up question with triple chevrons (<<<How does my Qualified Pension Plan differ from TDA?>>>). Try not to repeat questions that have already been asked.
     Only generate follow-up questions and do not generate any text before or after the follow-up questions, such as 'Next Questions'
     """
 
-    QUERY_PROMPT_TEMPLATE = """Below is a history of the conversation so far, and a new question asked by the user that needs to be answered by searching in source documents.
-    Generate a search query based on the conversation and the new question. Treat each search term as an individual keyword. Do not combine terms in quotes or brackets.
+QUERY_PROMPT_TEMPLATE = """Below is a history of the conversation so far, and a new question asked by the user that needs to be answered by searching in TRSNYC source documents.
+    Generate a focused, effective search query based on the conversation and the new question. Prioritize specific terms related to retirement benefits, pension plans, or TRSNYC procedures.
+    Treat each search term as an individual keyword. Do not combine terms in quotes or brackets.
     Do not include cited source filenames and document names e.g info.txt or doc.pdf in the search query terms.
     Do not include any text inside [] or <<<>>> in the search query terms.
     Do not include any special characters like '+'.
     If you cannot generate a search query, return just the number 0.
     """
 
-    QUERY_PROMPT_FEW_SHOTS = [
-        {'role' : Approach.USER, 'content' : 'What are the future plans for public transportation development?' },
-        {'role' : Approach.ASSISTANT, 'content' : 'Future plans for public transportation' },
-        {'role' : Approach.USER, 'content' : 'how much renewable energy was generated last year?' },
-        {'role' : Approach.ASSISTANT, 'content' : 'Renewable energy generation last year' }
-    ]
+QUERY_PROMPT_FEW_SHOTS = [
+    {'role': Approach.USER, 'content': 'What are the requirements for early retirement under TRSNYC?'},
+    {'role': Approach.ASSISTANT, 'content': 'early retirement requirements eligibility TRSNYC'},
+    {'role': Approach.USER, 'content': 'How do I calculate my pension benefits based on years of service?'},
+    {'role': Approach.ASSISTANT, 'content': 'pension calculation benefits years service formula'}
+]
 
-    RESPONSE_PROMPT_FEW_SHOTS = [
-        {"role": Approach.USER ,'content': 'I am looking for information in source documents'},
-        {'role': Approach.ASSISTANT, 'content': 'user is looking for information in source documents. Do not provide answers that are not in the source documents'},
-        {'role': Approach.USER, 'content': 'What steps are being taken to promote energy conservation?'},
-        {'role': Approach.ASSISTANT, 'content': 'Several steps are being taken to promote energy conservation including reducing energy consumption, increasing energy efficiency, and increasing the use of renewable energy sources.Citations[File0]'}
-    ]
-    
-    
-    def __init__(
+RESPONSE_PROMPT_FEW_SHOTS = [
+    {"role": Approach.USER, "content": "I need information about my TRS benefits"},
+    {"role": Approach.ASSISTANT, "content": "I'll help you find the information you need about your TRS benefits. To provide you with accurate information, I'll only reference official TRSNYC documentation."},
+    {"role": Approach.USER, "content": "What options do I have for withdrawing from my TDA account?"},
+    {"role": Approach.ASSISTANT, "content": "You have several options for withdrawing from your TDA account. The primary methods include full withdrawal upon retirement, partial withdrawals while employed, and structured periodic payments. Each option has specific eligibility requirements and potential tax implications. For instance, full withdrawals are typically available upon retirement or separation from service, while partial withdrawals may be available under certain hardship conditions. [File2] Additionally, you should be aware that withdrawals before age 59½ may incur early withdrawal penalties, though there are exceptions for certain qualifying events. [File1]"}
+]
+        
+def __init__(
         self,
         search_client: SearchClient,
         oai_endpoint: str,
@@ -146,7 +176,7 @@ class ChatReadRetrieveReadApproach(Approach):
       
         
     # def run(self, history: list[dict], overrides: dict) -> any:
-    async def run(self, history: Sequence[dict[str, str]], overrides: dict[str, Any], citation_lookup: dict[str, Any], thought_chain: dict[str, Any]) -> Any:
+async def run(self, history: Sequence[dict[str, str]], overrides: dict[str, Any], citation_lookup: dict[str, Any], thought_chain: dict[str, Any]) -> Any:
 
         log = logging.getLogger("uvicorn")
         log.setLevel('DEBUG')
@@ -439,7 +469,7 @@ class ChatReadRetrieveReadApproach(Approach):
             return
 
 
-    def detect_language(self, text: str) -> str:
+def detect_language(self, text: str) -> str:
         """ Function to detect the language of the text"""
         try:
             endpoint_region = self.enrichment_endpoint.split("https://")[1].split(".api")[0]
@@ -460,7 +490,7 @@ class ChatReadRetrieveReadApproach(Approach):
         except Exception as e:
             raise Exception(f"An error occurred during language detection: {str(e)}") from e
      
-    def translate_response(self, response: str, target_language: str) -> str:
+def translate_response(self, response: str, target_language: str) -> str:
         """ Function to translate the response to target language"""
         endpoint_region = self.enrichment_endpoint.split("https://")[1].split(".api")[0]      
         api_translate_endpoint = f"https://{self.azure_ai_translation_domain}/translate?api-version=3.0"
@@ -481,7 +511,7 @@ class ChatReadRetrieveReadApproach(Approach):
         else:
             raise Exception(f"Error translating response: {response.status_code}")
 
-    def get_source_file_with_sas(self, source_file: str) -> str:
+def get_source_file_with_sas(self, source_file: str) -> str:
         """ Function to return the source file with a SAS token"""
         try:
             sas_token = generate_account_sas(
