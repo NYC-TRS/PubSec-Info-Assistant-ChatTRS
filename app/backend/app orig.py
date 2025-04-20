@@ -6,15 +6,14 @@ import asyncio
 # from sse_starlette.sse import EventSourceResponse
 # from starlette.responses import StreamingResponse
 from starlette.responses import Response
-import logging  # Added
-from datetime import datetime, time, timedelta  # Added datetime
+import logging
 import os
 import json
 import urllib.parse
 import pandas as pd
+from datetime import datetime, time, timedelta
 from fastapi.staticfiles import StaticFiles
-# Added Request, Form
-from fastapi import FastAPI, File, HTTPException, Request, UploadFile, Form
+from fastapi import FastAPI, File, HTTPException, Request, UploadFile
 from fastapi.responses import RedirectResponse, StreamingResponse
 import openai
 from approaches.comparewebwithwork import CompareWebWithWork
@@ -32,7 +31,6 @@ from azure.storage.blob import (
     BlobServiceClient,
     ResourceTypes,
     generate_account_sas,
-    ContentSettings  # Added for file upload
 )
 
 from approaches.tabulardataassistant import (
@@ -111,20 +109,9 @@ for key, value in ENV.items():
 
 str_to_bool = {'true': True, 'false': False}
 
-# --- Logging Setup ---
-# Basic configuration, Azure App Service might provide more advanced integration via APPINSIGHTS_INSTRUMENTATIONKEY
-logging.basicConfig(level=logging.INFO,
-                    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-log = logging.getLogger(__name__)  # Use __name__ for the logger
-# Set level from env var or default to INFO
-log.setLevel(ENV.get("LOG_LEVEL", "INFO").upper())
+log = logging.getLogger("uvicorn")
+log.setLevel('DEBUG')
 log.propagate = True
-
-# Simple in-memory set to track users seen in this instance/session to avoid re-logging start
-# NOTE: This won't persist across restarts or multiple server instances.
-users_seen_this_session = set()
-# --- End Logging Setup ---
-
 
 dffinal = None
 # Used by the OpenAI SDK
@@ -167,10 +154,6 @@ blob_client = BlobServiceClient(
 )
 blob_container = blob_client.get_container_client(
     ENV["AZURE_BLOB_STORAGE_CONTAINER"])
-# Get client for upload container (needed for file upload endpoint)
-blob_upload_container_client = blob_client.get_container_client(
-    ENV["AZURE_BLOB_STORAGE_UPLOAD_CONTAINER"])
-
 
 model_name = ''
 model_version = ''
@@ -274,37 +257,6 @@ chat_approaches = {
     )
 }
 
-# --- Middleware Definition ---
-
-
-async def log_session_start_middleware(request: Request, call_next):
-    global users_seen_this_session
-    username = None
-    # Azure App Service Authentication typically injects user info in headers.
-    # Common headers are X-MS-CLIENT-PRINCIPAL-NAME (often email/UPN)
-    # or X-MS-CLIENT-PRINCIPAL-ID (object ID). Adjust if your setup uses different ones.
-    try:
-        principal_name_header = "x-ms-client-principal-name"  # Case-insensitive check
-        if principal_name_header in request.headers:
-            username = request.headers[principal_name_header]
-
-        # Simple check to log only once per user per instance lifetime
-        if username and username not in users_seen_this_session:
-            timestamp = datetime.now().isoformat()
-            log.info(
-                f"User session started: User={username}, Timestamp={timestamp}")
-            # Add user to prevent re-logging for this instance
-            users_seen_this_session.add(username)
-
-    except Exception as e:
-        # Log errors but don't block requests
-        log.error(f"Error in session logging middleware: {e}")
-
-    response = await call_next(request)
-    return response
-# --- End Middleware Definition ---
-
-
 # Create API
 app = FastAPI(
     title="IA Web API",
@@ -313,77 +265,33 @@ app = FastAPI(
     docs_url="/docs",
 )
 
-# Add the session logging middleware
-app.middleware("http")(log_session_start_middleware)
-
 
 @app.get("/", include_in_schema=False, response_class=RedirectResponse)
 async def root():
     """Redirect to the index.html page"""
     return RedirectResponse(url="/index.html")
 
-# --- Function to wrap the stream, log the full response, and yield chunks ---
-async def log_streaming_response(stream_generator, username, timestamp, approach):
-    response_chunks = []
-    full_response_content = ""
-    try:
-        async for chunk_str in stream_generator:
-            response_chunks.append(chunk_str) # Store the raw chunk string
-            try:
-                # Attempt to parse and extract content for logging
-                chunk_json = json.loads(chunk_str)
-                if "content" in chunk_json and chunk_json["content"]:
-                    full_response_content += chunk_json["content"]
-            except json.JSONDecodeError:
-                # Handle cases where a chunk might not be valid JSON or doesn't contain 'content'
-                log.debug(f"Could not parse chunk for logging: {chunk_str}")
-            except Exception as e:
-                 log.error(f"Error processing chunk for logging: {e}")
-            yield chunk_str # Yield the original chunk to the client
-    finally:
-        # This block executes after the stream generator is exhausted or if an error occurs during streaming
-        # Log the complete accumulated response
-        # Replace newline characters for better readability in logs if desired
-        log_content = full_response_content.replace("\n", "\\n")
-        log.info(f"Bot response complete: User={username}, Timestamp={timestamp}, Approach={approach}, Response='{log_content}'")
-# --- End Stream Wrapping Function ---
-
 
 @app.post("/chat")
 async def chat(request: Request):
-    """Chat with the bot using a given approach"""
+    """Chat with the bot using a given approach
+
+    Args:
+        request (Request): The incoming request object
+
+    Returns:
+        dict: The response containing the chat results
+
+    Raises:
+        dict: The error response if an exception occurs during the chat
+    """
     json_body = await request.json()
     approach = json_body.get("approach")
-
-    # <<< --- ADD USER QUESTION LOGGING HERE --- >>>
-    username = "unknown_user"  # Default username
-    timestamp = datetime.now().isoformat()  # Timestamp for logging
-    try:
-        # Attempt to get username from header
-        username = request.headers.get(
-            "x-ms-client-principal-name", "unknown_user")
-        # Get last user message from history
-        user_message = json_body.get(
-            "history", [{}])[-1].get("user", "no_message")
-        # Log the user question
-        log.info(
-            f"User question: User={username}, Timestamp={timestamp}, Message='{user_message}'")
-    except Exception as e:
-        log.error(f"Error logging user question: {e}")
-    # <<< --- END USER QUESTION LOGGING --- >>>
-
     try:
         impl = chat_approaches.get(Approaches(int(approach)))
         if not impl:
-            log.error(
-                f"Unknown approach selected: User={username}, Timestamp={timestamp}, Approach={approach}")
             return {"error": "unknown approach"}, 400
 
-        # <<< --- ADD BOT RESPONSE START LOGGING HERE --- >>>
-        
-        # <<< --- END BOT RESPONSE START LOGGING --- >>>
-
-        # Existing logic to run the approach and get the response stream 'r'
         if (Approaches(int(approach)) == Approaches.CompareWorkWithWeb or Approaches(int(approach)) == Approaches.CompareWebWithWork):
             r = impl.run(json_body.get("history", []), json_body.get("overrides", {
             }), json_body.get("citation_lookup", {}), json_body.get("thought_chain", {}))
@@ -391,20 +299,23 @@ async def chat(request: Request):
             r = impl.run(json_body.get("history", []), json_body.get(
                 "overrides", {}), {}, json_body.get("thought_chain", {}))
 
-        # Wrap the stream generator 'r' with the logging function
-        logged_stream = log_streaming_response(r, username, timestamp, approach)
-        return StreamingResponse(logged_stream, media_type="application/x-ndjson")
+        return StreamingResponse(r, media_type="application/x-ndjson")
 
     except Exception as ex:
-        # Log the error during chat processing
-        log.error(
-            f"Chat processing error: User={username}, Timestamp={timestamp}, Approach={approach}, Error={str(ex)}")
-        # Raise HTTPException for FastAPI to handle
+        log.error(f"Error in chat:: {ex}")
         raise HTTPException(status_code=500, detail=str(ex)) from ex
+
 
 @app.get("/getblobclienturl")
 async def get_blob_client_url():
-    """Get a URL for a file in Blob Storage with SAS token."""
+    """Get a URL for a file in Blob Storage with SAS token.
+
+    This function generates a Shared Access Signature (SAS) token for accessing a file in Blob Storage.
+    The generated URL includes the SAS token as a query parameter.
+
+    Returns:
+        dict: A dictionary containing the URL with the SAS token.
+    """
     sas_token = generate_account_sas(
         ENV["AZURE_BLOB_STORAGE_ACCOUNT"],
         ENV["AZURE_BLOB_STORAGE_KEY"],
@@ -427,7 +338,15 @@ async def get_blob_client_url():
 
 @app.post("/getalluploadstatus")
 async def get_all_upload_status(request: Request):
-    """Get the status and tags of all file uploads."""
+    """
+    Get the status and tags of all file uploads in the last N hours.
+
+    Parameters:
+    - request: The HTTP request object.
+
+    Returns:
+    - results: The status of all file uploads in the specified timeframe.
+    """
     json_body = await request.json()
     timeframe = json_body.get("timeframe")
     state = json_body.get("state")
@@ -439,9 +358,9 @@ async def get_all_upload_status(request: Request):
                                                            folder,
                                                            tag,
                                                            os.environ["AZURE_BLOB_STORAGE_UPLOAD_CONTAINER"])
-        # The rest of the tag retrieval seems redundant if read_files_status_by_timeframe already returns tags.
-        # Consider simplifying if StatusLog class handles this efficiently.
-        # Keeping original logic for now:
+
+        # retrieve tags for each file
+        # Initialize an empty list to hold the tags
         items = []
         cosmos_client = CosmosClient(
             url=statusLog._url, credential=statusLog._key)
@@ -452,6 +371,8 @@ async def get_all_upload_status(request: Request):
             query=query_string,
             enable_cross_partition_query=True
         ))
+
+        # Extract and split tags
         unique_tags = set()
         for item in items:
             tags = item.split(',')
@@ -465,34 +386,55 @@ async def get_all_upload_status(request: Request):
 
 @app.post("/getfolders")
 async def get_folders(request: Request):
-    """Get all folders."""
+    """
+    Get all folders.
+
+    Parameters:
+    - request: The HTTP request object.
+
+    Returns:
+    - results: list of unique folders.
+    """
     try:
-        blob_container_client = blob_client.get_container_client(
+        blob_container = blob_client.get_container_client(
             os.environ["AZURE_BLOB_STORAGE_UPLOAD_CONTAINER"])
-        folders = set()  # Use a set for automatic uniqueness
-        blob_list = blob_container_client.list_blobs()
+        # Initialize an empty list to hold the folder paths
+        folders = []
+        # List all blobs in the container
+        blob_list = blob_container.list_blobs()
+        # Iterate through the blobs and extract folder names and add unique values to the list
         for blob in blob_list:
+            # Extract the folder path if exists
             folder_path = os.path.dirname(blob.name)
-            if folder_path:  # Add only if there's a folder path
-                folders.add(folder_path)
+            if folder_path and folder_path not in folders:
+                folders.append(folder_path)
     except Exception as ex:
         log.exception("Exception in /getfolders")
         raise HTTPException(status_code=500, detail=str(ex)) from ex
-    return list(folders)  # Convert set back to list
+    return folders
 
 
 @app.post("/deleteItems")
 async def delete_Items(request: Request):
-    """Delete a blob."""
+    """
+    Delete a blob.
+
+    Parameters:
+    - request: The HTTP request object.
+
+    Returns:
+    - results: list of unique folders.
+    """
     json_body = await request.json()
     full_path = json_body.get("path")
-    path = full_path.split("/", 1)[1]  # remove the container prefix
+    # remove the container prefix
+    path = full_path.split("/", 1)[1]
     try:
-        blob_container_client = blob_client.get_container_client(
+        blob_container = blob_client.get_container_client(
             os.environ["AZURE_BLOB_STORAGE_UPLOAD_CONTAINER"])
-        blob_container_client.delete_blob(path)
+        blob_container.delete_blob(path)
         statusLog.upsert_document(document_path=full_path,
-                                  status='Delete initiated',
+                                  status='Delete intiated',
                                   status_classification=StatusClassification.INFO,
                                   state=State.DELETING,
                                   fresh_start=False)
@@ -506,23 +448,33 @@ async def delete_Items(request: Request):
 
 @app.post("/resubmitItems")
 async def resubmit_Items(request: Request):
-    """Resubmit a blob."""
+    """
+    Resubmit a blob.
+
+    Parameters:
+    - request: The HTTP request object.
+
+    Returns:
+    - results: list of unique folders.
+    """
     json_body = await request.json()
     path = json_body.get("path")
-    path = path.split("/", 1)[1]  # remove the container prefix
+    # remove the container prefix
+    path = path.split("/", 1)[1]
     try:
-        blob_container_client = blob_client.get_container_client(
+        blob_container = blob_client.get_container_client(
             os.environ["AZURE_BLOB_STORAGE_UPLOAD_CONTAINER"])
-        blob_data = blob_container_client.download_blob(path).readall()
-        # Re-upload to potentially trigger processing again (assuming blob trigger)
-        blob_container_client.upload_blob(
-            name=path, data=blob_data, overwrite=True)
+        # Read the blob content into memory
+        blob_data = blob_container.download_blob(path).readall()
+        # Overwrite the blob with the modified data
+        blob_container.upload_blob(name=path, data=blob_data, overwrite=True)
+        # add the container to the path to avoid adding another doc in the status db
         full_path = os.environ["AZURE_BLOB_STORAGE_UPLOAD_CONTAINER"] + '/' + path
         statusLog.upsert_document(document_path=full_path,
                                   status='Resubmitted to the processing pipeline',
                                   status_classification=StatusClassification.INFO,
                                   state=State.QUEUED,
-                                  fresh_start=False)  # Use False to update existing log
+                                  fresh_start=False)
         statusLog.save_document(document_path=full_path)
 
     except Exception as ex:
@@ -533,8 +485,18 @@ async def resubmit_Items(request: Request):
 
 @app.post("/gettags")
 async def get_tags(request: Request):
-    """Get all unique tags."""
+    """
+    Get all tags.
+
+    Parameters:
+    - request: The HTTP request object.
+
+    Returns:
+    - results: list of unique tags.
+    """
     try:
+        # Initialize an empty list to hold the tags
+        items = []
         cosmos_client = CosmosClient(
             url=statusLog._url, credential=statusLog._key)
         database = cosmos_client.get_database_client(statusLog._database_name)
@@ -544,6 +506,8 @@ async def get_tags(request: Request):
             query=query_string,
             enable_cross_partition_query=True
         ))
+
+        # Extract and split tags
         unique_tags = set()
         for item in items:
             tags = item.split(',')
@@ -552,42 +516,61 @@ async def get_tags(request: Request):
     except Exception as ex:
         log.exception("Exception in /gettags")
         raise HTTPException(status_code=500, detail=str(ex)) from ex
-    return list(unique_tags)  # Convert set back to list
+    return unique_tags
 
 
 @app.post("/logstatus")
 async def logstatus(request: Request):
-    """Log the status of a file upload."""
+    """
+    Log the status of a file upload to CosmosDB.
+
+    Parameters:
+    - request: Request object containing the HTTP request data.
+
+    Returns:
+    - A dictionary with the status code 200 if successful, or an error
+        message with status code 500 if an exception occurs.
+    """
     try:
         json_body = await request.json()
         path = json_body.get("path")
         status = json_body.get("status")
-        status_classification_str = json_body.get(
-            "status_classification", "INFO").upper()
-        state_str = json_body.get("state", "PROCESSING").upper()
-
-        # Safely get enum members, defaulting to INFO/PROCESSING if invalid
-        status_classification = StatusClassification[
-            status_classification_str] if status_classification_str in StatusClassification.__members__ else StatusClassification.INFO
-        state = State[state_str] if state_str in State.__members__ else State.PROCESSING
+        status_classification = StatusClassification[json_body.get(
+            "status_classification").upper()]
+        state = State[json_body.get("state").upper()]
 
         statusLog.upsert_document(document_path=path,
                                   status=status,
                                   status_classification=status_classification,
                                   state=state,
-                                  fresh_start=True)  # Assuming this endpoint always starts a log
+                                  fresh_start=True)
         statusLog.save_document(document_path=path)
 
     except Exception as ex:
         log.exception("Exception in /logstatus")
         raise HTTPException(status_code=500, detail=str(ex)) from ex
-    # Return success explicitly
-    return {"status": "success"}
+    raise HTTPException(status_code=200, detail="Success")
 
 
 @app.get("/getInfoData")
 async def get_info_data():
-    """Get application info data."""
+    """
+    Get the info data for the app.
+
+    Returns:
+        dict: A dictionary containing various information data for the app.
+            - "AZURE_OPENAI_CHATGPT_DEPLOYMENT": The deployment information for Azure OpenAI ChatGPT.
+            - "AZURE_OPENAI_MODEL_NAME": The name of the Azure OpenAI model.
+            - "AZURE_OPENAI_MODEL_VERSION": The version of the Azure OpenAI model.
+            - "AZURE_OPENAI_SERVICE": The Azure OpenAI service information.
+            - "AZURE_SEARCH_SERVICE": The Azure search service information.
+            - "AZURE_SEARCH_INDEX": The Azure search index information.
+            - "TARGET_LANGUAGE": The target language for query terms.
+            - "USE_AZURE_OPENAI_EMBEDDINGS": Flag indicating whether to use Azure OpenAI embeddings.
+            - "EMBEDDINGS_DEPLOYMENT": The deployment information for embeddings.
+            - "EMBEDDINGS_MODEL_NAME": The name of the embeddings model.
+            - "EMBEDDINGS_MODEL_VERSION": The version of the embeddings model.
+    """
     response = {
         "AZURE_OPENAI_CHATGPT_DEPLOYMENT": ENV["AZURE_OPENAI_CHATGPT_DEPLOYMENT"],
         "AZURE_OPENAI_MODEL_NAME": f"{model_name}",
@@ -606,38 +589,41 @@ async def get_info_data():
 
 @app.get("/getWarningBanner")
 async def get_warning_banner():
-    """Get the warning banner text."""
-    return {"WARNING_BANNER_TEXT": ENV["CHAT_WARNING_BANNER_TEXT"]}
+    """Get the warning banner text"""
+    response = {
+        "WARNING_BANNER_TEXT": ENV["CHAT_WARNING_BANNER_TEXT"]
+    }
+    return response
 
 
 @app.get("/getMaxCSVFileSize")
 async def get_max_csv_file_size():
-    """Get the max csv size."""
-    return {"MAX_CSV_FILE_SIZE": ENV["MAX_CSV_FILE_SIZE"]}
+    """Get the max csv size"""
+    response = {
+        "MAX_CSV_FILE_SIZE": ENV["MAX_CSV_FILE_SIZE"]
+    }
+    return response
 
 
 @app.post("/getcitation")
 async def get_citation(request: Request):
-    """Get the citation content for a given chunk file path."""
+    """
+    Get the citation for a given file
+
+    Parameters:
+        request (Request): The HTTP request object
+
+    Returns:
+        dict: The citation results in JSON format
+    """
     try:
         json_body = await request.json()
-        # Citation path usually comes URL encoded from the frontend
-        citation_path_encoded = json_body.get("citation")
-        if not citation_path_encoded:
-            raise HTTPException(
-                status_code=400, detail="Citation path is required")
-
-        # Decode the URL-encoded path
-        citation_path_decoded = urllib.parse.unquote(citation_path_encoded)
-
-        # Assuming citation_path_decoded is the full path like 'container/folder/chunk.json'
-        blob = blob_container.get_blob_client(
-            citation_path_decoded).download_blob()
-        decoded_text = blob.readall().decode('utf-8')  # Specify encoding
+        citation = urllib.parse.unquote(json_body.get("citation"))
+        blob = blob_container.get_blob_client(citation).download_blob()
+        decoded_text = blob.readall().decode()
         results = json.loads(decoded_text)
     except Exception as ex:
-        log.exception(
-            f"Exception in /getcitation for path: {citation_path_encoded}")
+        log.exception("Exception in /getcitation")
         raise HTTPException(status_code=500, detail=str(ex)) from ex
     return results
 
@@ -646,73 +632,88 @@ async def get_citation(request: Request):
 
 @app.get("/getApplicationTitle")
 async def get_application_title():
-    """Get the application title text."""
-    return {"APPLICATION_TITLE": ENV["APPLICATION_TITLE"]}
+    """Get the application title text
+
+    Returns:
+        dict: A dictionary containing the application title.
+    """
+    response = {
+        "APPLICATION_TITLE": ENV["APPLICATION_TITLE"]
+    }
+    return response
 
 
 @app.get("/getalltags")
 async def get_all_tags():
-    """Get all unique tags from status logs."""
+    """
+    Get the status of all tags in the system
+
+    Returns:
+        dict: A dictionary containing the status of all tags
+    """
     try:
         results = statusLog.get_all_tags()
-        # get_all_tags currently returns a comma-separated string, convert to list
-        tag_list = list(set(results.split(','))) if results else []
     except Exception as ex:
         log.exception("Exception in /getalltags")
         raise HTTPException(status_code=500, detail=str(ex)) from ex
-    return tag_list
+    return results
 
 
 @app.get("/getTempImages")
 async def get_temp_images():
-    """Get base64 encoded images from the temp directory."""
+    """Get the images in the temp directory
+
+    Returns:
+        list: A list of image data in the temp directory.
+    """
     images = get_images_in_temp()
     return {"images": images}
 
 
-# --- Tabular Data Assistant Endpoints ---
+
+
+
 @app.post("/posttd")
 async def posttd(csv: UploadFile = File(...)):
-    global dffinal
     try:
+        global dffinal
+        # Read the file into a pandas DataFrame
         content = await csv.read()
-        # Use latin-1 encoding for broader compatibility, consider utf-8-sig if BOM is present
         df = pd.read_csv(StringIO(content.decode('latin-1')))
+
         dffinal = df
-        save_df(df)  # Assuming save_df stores it appropriately for the agent
+        # Process the DataFrame...
+        save_df(df)
     except Exception as ex:
-        log.exception(f"Error processing uploaded CSV: {csv.filename}")
-        raise HTTPException(
-            status_code=500, detail=f"Error processing CSV: {str(ex)}") from ex
-    return {"filename": csv.filename, "message": "CSV processed successfully"}
+        raise HTTPException(status_code=500, detail=str(ex)) from ex
+
+    # return {"filename": csv.filename}
 
 
 @app.get("/process_td_agent_response")
-async def process_td_agent_response(retries=3, delay=1, question: Optional[str] = None):
+async def process_td_agent_response(retries=3, delay=1000, question: Optional[str] = None):
     if question is None:
         raise HTTPException(status_code=400, detail="Question is required")
-    if dffinal is None:
-        return ["error: CSV has not been loaded or processed yet."]
-
     for i in range(retries):
         try:
-            results = td_agent_response(question, dffinal)  # Pass dffinal
+            results = td_agent_response(question)
             return results
         except AttributeError as ex:
             log.exception(
-                f"Exception in /process_td_agent_response: {str(ex)}")
-            if i < retries - 1:
-                await asyncio.sleep(delay)
-            # More specific check
-            elif "'NoneType' object has no attribute 'stream'" in str(ex):
-                return ["error: CSV related error, potentially not loaded correctly."]
+                f"Exception in /process_tabular_data_agent_response:{str(ex)}")
+            if i < retries - 1:  # i is zero indexed
+                await asyncio.sleep(delay)  # wait a bit before trying again
             else:
-                raise HTTPException(status_code=500, detail=str(ex)) from ex
+                if str(ex) == "'NoneType' object has no attribute 'stream'":
+                    return ["error: Csv has not been loaded"]
+                else:
+                    raise HTTPException(
+                        status_code=500, detail=str(ex)) from ex
         except Exception as ex:
             log.exception(
-                f"Exception in /process_td_agent_response: {str(ex)}")
-            if i < retries - 1:
-                await asyncio.sleep(delay)
+                f"Exception in /process_tabular_data_agent_response:{str(ex)}")
+            if i < retries - 1:  # i is zero indexed
+                await asyncio.sleep(delay)  # wait a bit before trying again
             else:
                 raise HTTPException(status_code=500, detail=str(ex)) from ex
 
@@ -722,173 +723,93 @@ async def getTdAnalysis(retries=3, delay=1, question: Optional[str] = None):
     global dffinal
     if question is None:
         raise HTTPException(status_code=400, detail="Question is required")
-    if dffinal is None:
-        return ["error: CSV has not been loaded or processed yet."]
 
     for i in range(retries):
         try:
-            # save_df(dffinal) # save_df might not be needed here if already set in posttd
-            results = td_agent_scratch_pad(question, dffinal)  # Pass dffinal
+            save_df(dffinal)
+            results = td_agent_scratch_pad(question, dffinal)
             return results
         except AttributeError as ex:
-            log.exception(f"Exception in /getTdAnalysis: {str(ex)}")
-            if i < retries - 1:
-                await asyncio.sleep(delay)
-            # More specific check
-            elif "'NoneType' object has no attribute 'stream'" in str(ex):
-                return ["error: CSV related error, potentially not loaded correctly."]
+            log.exception(f"Exception in /getTdAnalysis:{str(ex)}")
+            if i < retries - 1:  # i is zero indexed
+                await asyncio.sleep(delay)  # wait a bit before trying again
             else:
-                raise HTTPException(status_code=500, detail=str(ex)) from ex
+                if str(ex) == "'NoneType' object has no attribute 'stream'":
+                    return ["error: Csv has not been loaded"]
+                else:
+                    raise HTTPException(
+                        status_code=500, detail=str(ex)) from ex
         except Exception as ex:
-            log.exception(f"Exception in /getTdAnalysis: {str(ex)}")
-            if i < retries - 1:
-                await asyncio.sleep(delay)
+            log.exception(f"Exception in /getTdAnalysis:{str(ex)}")
+            if i < retries - 1:  # i is zero indexed
+                await asyncio.sleep(delay)  # wait a bit before trying again
             else:
                 raise HTTPException(status_code=500, detail=str(ex)) from ex
 
 
 @app.post("/refresh")
 async def refresh():
-    """Refresh the tabular data agent's state."""
-    global dffinal
+    """
+    Refresh the agent's state.
+
+    This endpoint calls the `refresh` function to reset the agent's state.
+
+    Raises:
+        HTTPException: If an error occurs while refreshing the agent's state.
+
+    Returns:
+        dict: A dictionary containing the status of the agent's state.
+    """
     try:
         refreshagent()
-        dffinal = None  # Clear the dataframe on refresh
-        log.info("Tabular data agent refreshed.")
     except Exception as ex:
         log.exception("Exception in /refresh")
         raise HTTPException(status_code=500, detail=str(ex)) from ex
     return {"status": "success"}
 
 
+
+
+
+
+
 @app.get("/tdstream")
 async def td_stream_response(question: str):
-    """Stream the scratchpad output for tabular data analysis."""
-    if dffinal is None:
-        async def error_stream():
-            yield f'event: error\ndata: {json.dumps({"error": "CSV has not been loaded or processed yet."})}\n\n'
-            yield f'event: end\ndata: Stream ended\n\n'
-        return StreamingResponse(error_stream(), media_type="text/event-stream")
+    save_df(dffinal)
 
     try:
-        # save_df(dffinal) might not be needed if set elsewhere
-        stream = td_agent_scratch_pad(question, dffinal)  # Pass dffinal
+        stream = td_agent_scratch_pad(question, dffinal)
         return StreamingResponse(stream, media_type="text/event-stream")
     except Exception as ex:
-        log.exception("Exception in /tdstream")
+        log.exception("Exception in /stream")
+        raise HTTPException(status_code=500, detail=str(ex)) from ex
 
-        async def error_stream():
-            yield f'event: error\ndata: {json.dumps({"error": str(ex)})}\n\n'
-            yield f'event: end\ndata: Stream ended\n\n'
-        return StreamingResponse(error_stream(), media_type="text/event-stream")
-# --- End Tabular Data Assistant Endpoints ---
+
+
 
 
 @app.get("/getFeatureFlags")
 async def get_feature_flags():
-    """Get feature flag settings."""
+    """
+    Get the feature flag settings for the app.
+
+    Returns:
+        dict: A dictionary containing various feature flags for the app.
+            - "ENABLE_WEB_CHAT": Flag indicating whether web chat is enabled.
+            - "ENABLE_UNGROUNDED_CHAT": Flag indicating whether ungrounded chat is enabled.
+            - "ENABLE_MATH_ASSISTANT": Flag indicating whether the math assistant is enabled.
+            - "ENABLE_TABULAR_DATA_ASSISTANT": Flag indicating whether the tabular data assistant is enabled.
+            - "ENABLE_MULTIMEDIA": Flag indicating whether multimedia is enabled.
+    """
     response = {
-        "ENABLE_WEB_CHAT": str_to_bool.get(ENV["ENABLE_WEB_CHAT"], False),
-        "ENABLE_UNGROUNDED_CHAT": str_to_bool.get(ENV["ENABLE_UNGROUNDED_CHAT"], False),
-        "ENABLE_MATH_ASSISTANT": str_to_bool.get(ENV["ENABLE_MATH_ASSISTANT"], False),
-        "ENABLE_TABULAR_DATA_ASSISTANT": str_to_bool.get(ENV["ENABLE_TABULAR_DATA_ASSISTANT"], False),
-        "ENABLE_MULTIMEDIA": str_to_bool.get(ENV["ENABLE_MULTIMEDIA"], False),
+        "ENABLE_WEB_CHAT": str_to_bool.get(ENV["ENABLE_WEB_CHAT"]),
+        "ENABLE_UNGROUNDED_CHAT": str_to_bool.get(ENV["ENABLE_UNGROUNDED_CHAT"]),
+        "ENABLE_MATH_ASSISTANT": str_to_bool.get(ENV["ENABLE_MATH_ASSISTANT"]),
+        "ENABLE_TABULAR_DATA_ASSISTANT": str_to_bool.get(ENV["ENABLE_TABULAR_DATA_ASSISTANT"]),
+        "ENABLE_MULTIMEDIA": str_to_bool.get(ENV["ENABLE_MULTIMEDIA"]),
     }
     return response
 
-# This endpoint is missing in the user's 745-line version
-
-
-@app.post("/file")
-async def upload_file(
-    file: UploadFile = File(...),
-    file_path: str = Form(...),  # Changed from Optional[str] to str
-    tags: Optional[str] = Form(None)  # Tags remain optional
-):
-    """
-    Upload a file to Azure Blob Storage.
-    Parameters:
-    - file: The file to upload.
-    - file_path: The path to save the file in Blob Storage (including filename). Required.
-    - tags: The tags to associate with the file (comma-separated string).
-    Returns:
-    - response: A message indicating the result of the upload.
-    """
-    if not file_path:
-        raise HTTPException(
-            status_code=400, detail="file_path form data is required.")
-
-    try:
-        # Prepare metadata only if tags are provided
-        metadata = {"tags": tags} if tags else None
-
-        blob_upload_client = blob_upload_container_client.get_blob_client(
-            file_path)
-
-        # Use upload_blob for potentially large files, handles chunking automatically
-        blob_upload_client.upload_blob(
-            file.file,  # Pass the file-like object directly
-            overwrite=True,
-            content_settings=ContentSettings(content_type=file.content_type),
-            metadata=metadata  # Pass metadata dict or None
-        )
-
-        return {"message": f"File '{file.filename}' uploaded successfully to '{file_path}'"}
-
-    except Exception as ex:
-        log.exception(f"Exception in /file endpoint for path: {file_path}")
-        raise HTTPException(status_code=500, detail=str(ex)) from ex
-
-# This endpoint is missing in the user's 745-line version
-
-
-@app.post("/get-file")
-async def get_file(request: Request):
-    """ Endpoint to fetch citation file content based on path """
-    try:
-        data = await request.json()
-        file_path = data.get('path')
-        if not file_path:
-            raise HTTPException(
-                status_code=400, detail="File path ('path') is required in the request body.")
-
-        # Assuming file_path includes the container name like 'upload/folder/file.pdf'
-        container_name, blob_name = file_path.split('/', 1)
-
-        # Decide which container client to use based on the path prefix
-        if container_name == ENV["AZURE_BLOB_STORAGE_UPLOAD_CONTAINER"]:
-            container_client_to_use = blob_upload_container_client
-        elif container_name == ENV["AZURE_BLOB_STORAGE_CONTAINER"]:
-            container_client_to_use = blob_container
-        else:
-            raise HTTPException(
-                status_code=400, detail=f"Invalid container specified in path: {container_name}")
-
-        citation_blob_client = container_client_to_use.get_blob_client(
-            blob=blob_name)
-
-        if not citation_blob_client.exists():
-            raise HTTPException(
-                status_code=404, detail=f"File not found at path: {file_path}")
-
-        blob_properties = citation_blob_client.get_blob_properties()
-        stream = citation_blob_client.download_blob().chunks()
-
-        return StreamingResponse(stream,
-                                 media_type=blob_properties.content_settings.content_type or "application/octet-stream",
-                                 headers={"Content-Disposition": f"inline; filename=\"{os.path.basename(blob_name)}\""})
-    except HTTPException as http_ex:
-        # Re-raise HTTPExceptions directly
-        raise http_ex
-    except Exception as ex:
-        log.exception(
-            f"Exception in /get-file endpoint for path: {data.get('path', 'Not Provided')}")
-        raise HTTPException(
-            status_code=500, detail=f"Internal server error: {str(ex)}")
-
-
-# Mount the static files directory
-# This should be one of the last things added to app
 app.mount("/", StaticFiles(directory="static"), name="static")
 
 if __name__ == "__main__":

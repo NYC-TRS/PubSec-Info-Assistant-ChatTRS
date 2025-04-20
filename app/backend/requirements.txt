@@ -2,7 +2,7 @@
 azure-cosmos==4.7.0
 azure-identity==1.18.0
 azure-mgmt-cognitiveservices==13.5.0
-azure-search-documents==11.5.1
+azure-search-documents==11.4.0
 azure-storage-blob==12.23.0
 cryptography==43.0.3
 fastapi==0.115.0

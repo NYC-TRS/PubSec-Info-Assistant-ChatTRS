@@ -156,7 +156,7 @@ module "backend" {
     AZURE_SEARCH_INDEX                      = var.searchIndexName
     AZURE_SEARCH_SERVICE                    = module.searchServices.name
     AZURE_SEARCH_SERVICE_ENDPOINT           = module.searchServices.endpoint
-    AZURE_OPENAI_CHATGPT_DEPLOYMENT         = var.chatGptDeploymentName != "" ? var.chatGptDeploymentName : (var.chatGptModelName != "" ? var.chatGptModelName : "gpt-35-turbo-16k")
+    AZURE_OPENAI_CHATGPT_DEPLOYMENT         = var.chatGptDeploymentName != "" ? var.chatGptDeploymentName : (var.chatGptModelName != "" ? var.chatGptModelName : "gpt-4o")
     AZURE_OPENAI_CHATGPT_MODEL_NAME         = var.chatGptModelName
     AZURE_OPENAI_CHATGPT_MODEL_VERSION      = var.chatGptModelVersion
     USE_AZURE_OPENAI_EMBEDDINGS             = var.useAzureOpenAIEmbeddings
@@ -202,11 +202,11 @@ module "openaiServices" {
 
   deployments = [
     {
-      name = var.chatGptDeploymentName != "" ? var.chatGptDeploymentName : (var.chatGptModelName != "" ? var.chatGptModelName : "gpt-35-turbo-16k")
+      name = var.chatGptDeploymentName != "" ? var.chatGptDeploymentName : (var.chatGptModelName != "" ? var.chatGptModelName : "gpt-4o")
       model = {
         format = "OpenAI"
-        name = var.chatGptModelName != "" ? var.chatGptModelName : "gpt-35-turbo-16k"
-        version = var.chatGptModelVersion != "" ? var.chatGptModelVersion : "0613"
+        name = var.chatGptModelName != "" ? var.chatGptModelName : "gpt-4o"
+        version = var.chatGptModelVersion != "" ? var.chatGptModelVersion : "2024-08-06"
       }
       sku_name = "Standard"
       sku_capacity = var.chatGptDeploymentCapacity

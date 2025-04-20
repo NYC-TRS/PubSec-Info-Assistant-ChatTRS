@@ -15,3 +15,4 @@ torch
 torchvision
 torchaudio
 uvicorn==0.30.6
+typing_inspect==0.9.0

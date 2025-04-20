@@ -120,12 +120,12 @@ export const AnalysisPanel = ({ answer, activeTab, activeCitation, sourceFile, p
                         ) : (
                             <div>
                                 <Separator>Metadata</Separator>
-                                {/* <Label>File Name</Label><Text>{activeCitationObj.file_name}</Text> */}
-                                {/* <Label>File URI</Label><Text>{activeCitationObj.file_uri}</Text> */}
+                                <Label>File Name</Label><Text>{activeCitationObj.file_name}</Text>
+                                <Label>File URI</Label><Text>{activeCitationObj.file_uri}</Text>
                                 <Label>Title</Label><Text>{activeCitationObj.title}</Text>
                                 <Label>Section</Label><Text>{activeCitationObj.section}</Text>
                                 <Label>Page Number(s)</Label><Text>{activeCitationObj.pages?.join(",")}</Text>
-                                {/* <Label>Token Count</Label><Text>{activeCitationObj.token_count}</Text> */}
+                                <Label>Token Count</Label><Text>{activeCitationObj.token_count}</Text>
                                 <Separator>Content</Separator>
                                 <Label>Content</Label><Text>{activeCitationObj.content}</Text>
                             </div>
@@ -137,7 +137,7 @@ export const AnalysisPanel = ({ answer, activeTab, activeCitation, sourceFile, p
                             <iframe title="Source File" src={'https://view.officeapps.live.com/op/view.aspx?src=' + encodeURIComponent(sourceFile as string) + "&action=embedview&wdStartOn=" + pageNumber + "&wdDisableDownload=1&wdDisablePrint=1"} width="100%" height={citationHeight} />
                         ) : sourceFileExt === "pdf" ? (
                             // Use object tag for PDFs because iframe does not support page numbers
-                            <object data={`${sourceFile}#page=${pageNumber}&toolbar=0&navpanes=0&scrollbar=0`} type="application/pdf" width="100%" height={citationHeight} />
+                            <object data={sourceFile + "#page=" + pageNumber} type="application/pdf" width="100%" height={citationHeight} />
                         ) : sourceFileExt === "md" ? (
                             // Render Markdown content using react-markdown
                             <ReactMarkdown>{markdownContent}</ReactMarkdown>
@@ -146,7 +146,7 @@ export const AnalysisPanel = ({ answer, activeTab, activeCitation, sourceFile, p
                             <pre>{plainTextContent}</pre>
                         ) : (
                             // Default to iframe for other file types
-                            <iframe title="Source File" src={`${sourceFile}#toolbar=0`} width="100%" height={citationHeight} />
+                            <iframe title="Source File" src={sourceFile} width="100%" height={citationHeight} />
                         )}
                     </PivotItem>
                 </Pivot>

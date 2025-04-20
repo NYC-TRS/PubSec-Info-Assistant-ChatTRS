@@ -373,7 +373,7 @@ const Chat = () => {
                                 </div>
                             }
                             <span className={styles.chatEmptyObjectives}>
-                                <i>Information Assistant uses AI. Check for mistakes.   </i><a href="https://github.com/microsoft/PubSec-Info-Assistant/blob/main/docs/transparency.md" target="_blank" rel="noopener noreferrer">Transparency Note</a>
+                                <i>ChatTRS uses Artificial Intelligence. Verify all responses before use.</i>
                             </span>
                             {activeChatMode != ChatMode.Ungrounded &&
                                 <div>
@@ -438,7 +438,7 @@ const Chat = () => {
                         )}
                         <QuestionInput
                             clearOnSend
-                            placeholder="Type a new question (e.g. What is the dress code?)"
+                            placeholder="Type your question here (e.g. What does QPP mean?)"
                             disabled={isLoading}
                             onSend={question => makeApiRequest(question, defaultApproach, {}, {}, {})}
                             onAdjustClick={() => setIsConfigPanelOpen(!isConfigPanelOpen)}
@@ -464,7 +464,7 @@ const Chat = () => {
                 )}
 
                 <Panel
-                    headerText="Configure answer generation"
+                    headerText="Prompt Response Mod"
                     isOpen={isConfigPanelOpen}
                     isBlocking={false}
                     onDismiss={() => setIsConfigPanelOpen(false)}
@@ -485,7 +485,7 @@ const Chat = () => {
                     {activeChatMode != ChatMode.Ungrounded &&
                         <SpinButton
                             className={styles.chatSettingsSeparator}
-                            label="Retrieve this many documents from search:"
+                            label="Document Citation count. Max 50"
                             min={1}
                             max={50}
                             defaultValue={retrieveCount.toString()}
@@ -500,8 +500,8 @@ const Chat = () => {
                             onChange={onUseSuggestFollowupQuestionsChange}
                         />
                     }
-                    <TextField className={styles.chatSettingsSeparator} defaultValue={userPersona} label="User Persona" onChange={onUserPersonaChange} />
-                    <TextField className={styles.chatSettingsSeparator} defaultValue={systemPersona} label="System Persona" onChange={onSystemPersonaChange} />
+                    <TextField className={styles.chatSettingsSeparator} defaultValue={userPersona} label="User Persona - Your role when asking" onChange={onUserPersonaChange} />
+                    <TextField className={styles.chatSettingsSeparator} defaultValue={systemPersona} label="System Persona - Assistant’s role when responding" onChange={onSystemPersonaChange} />
                     <ResponseLengthButtonGroup className={styles.chatSettingsSeparator} onClick={onResponseLengthChange} defaultValue={responseLength} />
                     <ResponseTempButtonGroup className={styles.chatSettingsSeparator} onClick={onResponseTempChange} defaultValue={responseTemp} />
                     {activeChatMode != ChatMode.Ungrounded &&
